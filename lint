@@ -26,6 +26,13 @@ def check_if_dir(input):
         found_files.append(input)
 
 
+def check_comment_ignore(line, rule):
+    """ Check if the line should be ignored based on the ignore rule."""
+    if "# disable" in line and f"{rule}" in line:
+        return True
+    return False    
+
+
 def help():
     print("Usage: lint <path>")
     print()
@@ -81,7 +88,10 @@ def disallowed_kinds(line):
     if any(k in line for k in ["kind:", "Kind"]):
         for obj in disallowed_objects:
             if obj.lower() in line:
-                error.append(f"'Kind: {obj}' is not allowed.")
+                if check_comment_ignore(line, "disallowed_kinds"):
+                    pass
+                else:
+                    error.append(f"'Kind: {obj}' is not allowed.")
     return error
 
 
