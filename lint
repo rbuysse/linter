@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import yaml
+
+rules = {
+    "line_rules": ["disallowed_kinds"],
+    "file_rules": ["external_secret_creation_policy",
+                   "external_secret_refresh"]
+}
+
+found_files = []
+
+class LintError(Exception):
+    def __init__(self, location, error):
+        self.location = location
+        self.error = error
+
+    def __str__(self):
+        return f"{self.location}: {self.error}"
+
+
+def check_if_dir(input):
+    """ Check if script arguments are a directory or a file.
+        If it's a directory, call find_yaml_files.
+        If it's a file, add it to found_files.
+    """
+    if os.path.isdir(input):
+        find_yaml_files(input)
+    else:
+        found_files.append(input)
+
+
+def check_comment_disable(line, rule):
+    """ Check if the line should be ignored based on the ignore rule."""
+    if "# disable" in line and f"{rule}" in line:
+        return True
+    return False    
+
+
+def help():
+    print("Usage: lint <path>")
+    print()
+    print("Recursively search for yaml files in the given directory and lint them.")
+    print("<path> can be a directory, a file or a list of either/both.")
+    sys.exit(1)
+
+
+def find_yaml_files(repo_path):
+    """ Recursively search for yaml files in the given directory.
+        Add file paths to the found_files list.
+    """
+    print(f"Searching for yaml files in '{repo_path}'")
+    for root, dirs, files in os.walk(repo_path):
+        for file in files:
+            if file.endswith(".yaml") or file.endswith(".yml"):
+                found_files.append(os.path.join(root, file))
+
+
+def lint(file_path):
+    errors = []
+    results = []
+    line_number = 0
+
+    with open(file_path, 'r') as file:
+        for line in file:
+            line_number += 1
+            line = line.lower()
+            for rule in rules["line_rules"]:
+                results.extend(globals()[rule](line, line_number))
+
+        # Rewind the file
+        file.seek(0)
+
+        try:
+            yaml_documents = yaml.safe_load_all(file)
+            if yaml_documents is None:
+                raise yaml.YAMLError("Failed to parse YAML file")
+
+            # for loop to handle multiple yaml documents in a single file
+            for doc in yaml_documents:
+                for rule in rules["file_rules"]:
+                    results.append(globals()[rule](doc, file_path))
+
+        except yaml.YAMLError as e:
+            print_error(f"Error in '{file_path}': {e}")
+            return 1
+
+    for result in results:
+        if result is not None:
+            errors.append(result)
+
+    if errors:
+        print(file_path)
+        for error in errors:
+            print_error(error)
+        print()
+        return 1
+    else:
+        return 0
+
+
+def print_error(error):
+    print(f"\033[91m{error}\033[0m")
+
+
+# ---==== rules ====---
+# Add new rules as functions and add them to the rules dictionary above.
+
+# ---==== line rules ====---
+
+def disallowed_kinds(line, line_number):
+    """ Look for disallowed kubernetes objects."""
+    errors = []
+    disallowed_objects = ["BuildConfig", "CatalogSourceConfig", "ClusterRole", 
+                          "ClusterRoleBinding", "Role", "RoleBinding", "Subscription"]
+    if any(k in line for k in ["kind:", "Kind"]):
+        for obj in disallowed_objects:
+            if obj.lower() in line:
+                if check_comment_disable(line, "disallowed_kinds"):
+                    pass
+                else:
+                    errors.append(f"'Kind: {obj}' is not allowed.")
+    return [LintError(line_number, error) for error in errors]
+
+# ---==== file rules ====---
+
+def external_secret_creation_policy(data, file_path):
+    """ Check if the ExternalSecret has a creationPolicy of 'Merge' """
+    if data['kind'] == "ExternalSecret":
+        try:
+            creation_policy = data['spec']['target']['creationPolicy']
+            if creation_policy != 'Merge':
+                return LintError(data['metadata']['name'], "ExternalSecrets must have" \
+                                 "a creationPolicy of \"Merge\"")
+        except KeyError:
+            return LintError(data['metadata']['name'], "creationPolicy missing. ExternalSecrets" \
+                             "must have a creationPolicy of \"Merge\"")
+    return None
+
+
+def external_secret_refresh(data, file_path):
+    if data.get('kind') == 'ExternalSecret':
+        try:
+            refresh_interval = data.get('spec').get('refreshInterval')
+            if refresh_interval != "1h":
+                return LintError(data['metadata']['name'], "ExternalSecrets must have " \
+                                 "a refreshInterval of 1h")
+        except KeyError:
+            return LintError(data['metadata']['name'], "refreshInterval missing. ExternalSecrets" \
+                             "must have a refreshInterval of 1h")
+
+# ---==== end rules ====---
+
+
+def main():
+    errors = []
+    if len(sys.argv) < 2:
+        help()
+
+    for arg in sys.argv[1:]:
+        if not os.path.exists(arg):
+            print_error(f"Path '{arg}' does not exist.")
+            sys.exit(1)
+        check_if_dir(arg)
+
+    for file in found_files:
+        lint(file)
+
+    if errors != None:
+        sys.exit(1)
+
+main()
