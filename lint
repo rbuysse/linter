@@ -60,10 +60,7 @@ def lint_lines(file_path):
             line_number += 1
             line = line.lower()
             # Search for disallowed Kind types
-            kind_errors = disallowed_kinds(line)
-            for error in kind_errors:
-                lint_error = LintError(line_number, error)
-                errors.append(lint_error)
+            errors.extend(disallowed_kinds(line, line_number))
             
     if errors:
         print_error(file_path)
@@ -80,9 +77,9 @@ def print_error(error):
 
 
 # rules
-def disallowed_kinds(line):
+def disallowed_kinds(line, line_number):
     """ Look for disallowed kubernetes objects."""
-    error = []
+    errors = []
     disallowed_objects = ["BuildConfig", "CatalogSourceConfig", "ClusterRole", 
                           "ClusterRoleBinding", "Role", "RoleBinding", "Subscription"]
     if any(k in line for k in ["kind:", "Kind"]):
@@ -91,8 +88,8 @@ def disallowed_kinds(line):
                 if check_comment_ignore(line, "disallowed_kinds"):
                     pass
                 else:
-                    error.append(f"'Kind: {obj}' is not allowed.")
-    return error
+                    errors.append(f"'Kind: {obj}' is not allowed.")
+    return [LintError(line_number, error) for error in errors]
 
 
 def main():
