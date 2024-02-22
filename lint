@@ -98,6 +98,9 @@ def main():
         help()
 
     for arg in sys.argv[1:]:
+        if not os.path.exists(arg):
+            print_error(f"Path '{arg}' does not exist.")
+            sys.exit(1)
         check_if_dir(arg)
 
     for file in found_files:
