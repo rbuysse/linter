@@ -51,6 +51,14 @@ def find_yaml_files(repo_path):
             if file.endswith(".yaml") or file.endswith(".yml"):
                 found_files.append(os.path.join(root, file))
 
+def lint_file(file_path):
+    with open(file_path, 'r') as file:
+        try:
+            yaml_data = yaml.safe_load(file)
+        except yaml.YAMLError as e:
+            print(e)
+        return 0
+
 
 def lint_lines(file_path):
     errors = []
@@ -93,7 +101,8 @@ def disallowed_kinds(line, line_number):
 
 
 def main():
-    lint_errors = 0
+    file_errors = 0
+    line_errors = 0
     if len(sys.argv) < 2:
         help()
 
@@ -104,11 +113,11 @@ def main():
         check_if_dir(arg)
 
     for file in found_files:
-        # lint_yaml_files(file)
-        foo = lint_lines(file)
-        lint_errors += foo
+        file_errors += lint_file(file)
+        line_errors += lint_lines(file)
 
-    if lint_errors:
+    if line_errors != 0 or file_errors != 0:
+        print_error("Found lint")
         sys.exit(1)
 
 main()
