@@ -4,10 +4,14 @@ import os
 import sys
 import yaml
 
+# TODO: fix empty line_rules
+
 rules = {
-    "line_rules": ["disallowed_kinds"],
-    "file_rules": ["external_secret_creation_policy",
-                   "external_secret_refresh"]
+    "line_rules": [],
+    # "file_rules": ["external_secret_creation_policy",
+    #                "external_secret_refresh"]
+    "file_rules": ["check_cluster_name",
+                   "memory_request_too_small"],
 }
 
 found_files = []
@@ -32,11 +36,18 @@ def check_if_dir(input):
         found_files.append(input)
 
 
-def check_comment_disable(line, rule):
-    """ Check if the line should be ignored based on the ignore rule."""
-    if "# disable" in line and f"{rule}" in line:
-        return True
-    return False    
+# def check_comment_disable(line, rule):
+#     """ Check if the line should be ignored based on the ignore rule."""
+#     if "# disable" in line and f"{rule}" in line:
+#         return True
+#     return False
+
+# def check_file_disable(data, rule):
+#     """ Check if the file should be ignored based on the ignore rule."""
+#     print(data)
+#     if f"# disable {rule}" in data:
+#         return True
+#     return False
 
 
 def help():
@@ -64,11 +75,13 @@ def lint(file_path):
     line_number = 0
 
     with open(file_path, 'r') as file:
-        for line in file:
-            line_number += 1
-            line = line.lower()
-            for rule in rules["line_rules"]:
-                results.extend(globals()[rule](line, line_number))
+        if len(rules["line_rules"]) > 0:
+            for line in file:
+                line_number += 1
+                line = line.lower()
+
+                for rule in rules["line_rules"]:
+                    results.extend(globals()[rule](line, line_number))
 
         # Rewind the file
         file.seek(0)
@@ -110,46 +123,90 @@ def print_error(error):
 
 # ---==== line rules ====---
 
-def disallowed_kinds(line, line_number):
-    """ Look for disallowed kubernetes objects."""
-    errors = []
-    disallowed_objects = ["BuildConfig", "CatalogSourceConfig", "ClusterRole", 
-                          "ClusterRoleBinding", "Role", "RoleBinding", "Subscription"]
-    if any(k in line for k in ["kind:", "Kind"]):
-        for obj in disallowed_objects:
-            if obj.lower() in line:
-                if check_comment_disable(line, "disallowed_kinds"):
-                    pass
-                else:
-                    errors.append(f"'Kind: {obj}' is not allowed.")
-    return [LintError(line_number, error) for error in errors]
+# def disallowed_kinds(line, line_number):
+#     """ Look for disallowed kubernetes objects."""
+#     errors = []
+#     disallowed_objects = ["BuildConfig", "CatalogSourceConfig", "ClusterRole",
+#                           "ClusterRoleBinding", "Role", "RoleBinding", "Subscription"]
+#     if any(k in line for k in ["kind:", "Kind"]):
+#         for obj in disallowed_objects:
+#             if obj.lower() in line:
+#                 if check_comment_disable(line, "disallowed_kinds"):
+#                     pass
+#                 else:
+#                     errors.append(f"'Kind: {obj}' is not allowed.")
+#     return [LintError(line_number, error) for error in errors]
+
+# def memory_request_too_small(line, line_number):
+#     if "memory" in line and any(char.isdigit() for char in line) and "m" in line:
+#         return LintError(line_number, "Memory request is too small.")
+
 
 # ---==== file rules ====---
 
-def external_secret_creation_policy(data, file_path):
-    """ Check if the ExternalSecret has a creationPolicy of 'Merge' """
-    if data['kind'] == "ExternalSecret":
-        try:
-            creation_policy = data['spec']['target']['creationPolicy']
-            if creation_policy != 'Merge':
-                return LintError(data['metadata']['name'], "ExternalSecrets must have" \
-                                 "a creationPolicy of \"Merge\"")
-        except KeyError:
-            return LintError(data['metadata']['name'], "creationPolicy missing. ExternalSecrets" \
-                             "must have a creationPolicy of \"Merge\"")
-    return None
+def check_cluster_name(data, file):
+    if file.endswith("values.yaml"):
+        if 'openshift-base' in data:
+            try:
+                cluster = data.get('cluster-name')
+
+            except KeyError:
+                return LintError(cluster, "Cluster name missing.")
+
+            if len(cluster) == 4:
+                if cluster in file and "-dmz" not in file:
+                    pass
+                else:
+                    return LintError(cluster, "Cluster name does not match file name.")
+
+            if cluster not in file:
+                return LintError(cluster, "Cluster name does not match file name.")
+
+def memory_request_too_small(data, file):
+    if file.endswith("values.yaml"):
+        if 'openshift-base' in data:
+            try:
+                resources = data['openshift-base']['resources']
+                memory_request = resources['requests']['memory']
+                memory_limit = resources['limits']['memory']
+                if not memory_request.endswith('Mi') or not memory_limit.endswith('Mi'):
+                    return LintError(file, "Memory request or limit too small.\n" \
+                                     "Please see the documentation here: \n" \
+                                     "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#meaning-of-memory")
+
+            except TypeError:
+                pass
+            except KeyError:
+                return LintError(file, "Memory request or limit missing.")
+
+# def external_secret_creation_policy(data, file_path):
+#     """ Check if the ExternalSecret has a creationPolicy of 'Merge' """
+#     if data['kind'] == "ExternalSecret":
+#         try:
+#             creation_policy = data['spec']['target']['creationPolicy']
+#             if creation_policy != 'Merge':
+#                 return LintError(data['metadata']['name'], "ExternalSecrets must have" \
+#                                  "a creationPolicy of \"Merge\"")
+#         except KeyError:
+#             return LintError(data['metadata']['name'], "creationPolicy missing. ExternalSecrets" \
+#                              "must have a creationPolicy of \"Merge\"")
+#     return None
 
 
-def external_secret_refresh(data, file_path):
-    if data.get('kind') == 'ExternalSecret':
-        try:
-            refresh_interval = data.get('spec').get('refreshInterval')
-            if refresh_interval != "1h":
-                return LintError(data['metadata']['name'], "ExternalSecrets must have " \
-                                 "a refreshInterval of 1h")
-        except KeyError:
-            return LintError(data['metadata']['name'], "refreshInterval missing. ExternalSecrets" \
-                             "must have a refreshInterval of 1h")
+# def external_secret_refresh(data, file_path):
+#     if data.get('kind') == 'ExternalSecret':
+#         try:
+#             refresh_interval = data.get('spec').get('refreshInterval')
+#             if refresh_interval != "1h":
+#                 if check_file_disable(data, "external_secret_refresh"):
+#                     pass
+#                 else:
+#                     return LintError(data['metadata']['name'], "ExternalSecrets must have " \
+#                                      "a refreshInterval of 1h")
+#         except KeyError:
+#             return LintError(data['metadata']['name'], "refreshInterval missing. ExternalSecrets" \
+#                              "must have a refreshInterval of 1h")
+
 
 # ---==== end rules ====---
 
@@ -168,7 +225,8 @@ def main():
     for file in found_files:
         lint(file)
 
-    if errors != None:
+    if errors is not None and len(errors) > 0:
+        print(f"FUCK: {errors}")
         sys.exit(1)
 
 main()
